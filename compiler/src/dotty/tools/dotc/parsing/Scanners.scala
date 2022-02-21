@@ -511,11 +511,8 @@ object Scanners {
       var lastWidth = IndentWidth.Zero
       var indentPrefix = EMPTY
       val nextWidth = indentWidth(offset)
-      currentRegion match {
-        case InCommaSeparated(r: Indented) if lastToken != COMMA =>
-          // println("setting!")
-          currentRegion = r
-        case _ =>
+      while(currentRegion.isInstanceOf[InCommaSeparated] && lastToken != COMMA) {
+        currentRegion = currentRegion.enclosing
       }
       currentRegion match
         case r: Indented =>
@@ -626,17 +623,12 @@ object Scanners {
       this.copyFrom(prev)
     }
 
-    def closeIndented(): Unit = {
-      // println(s"closeIndented ${currentRegion}")
+    def closeIndented(): Unit =
       currentRegion match
         case r: Indented if !r.isOutermost =>
           insert(OUTDENT, offset)
           currentRegion = r.outer
-        case InCommaSeparated(r: Indented) =>
-          currentRegion = r
-          closeIndented()
         case _ =>
-    }
 
     /** - Join CASE + CLASS => CASECLASS, CASE + OBJECT => CASEOBJECT
      *         SEMI + ELSE => ELSE, COLON + <EOL> => COLONEOL
