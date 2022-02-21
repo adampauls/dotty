@@ -1148,7 +1148,8 @@ import transform.SymUtils._
   }
 
   class ExpectedTokenButFound(expected: Token, found: Token)(using Context)
-  extends SyntaxMsg(ExpectedTokenButFoundID) {
+      extends SyntaxMsg(ExpectedTokenButFoundID) {
+ assert(expected != Tokens.EOF )
 
     private lazy val foundText = Tokens.showToken(found)
 

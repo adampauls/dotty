@@ -73,8 +73,8 @@ object Parsers {
     else new Parser(source)
 
   private val InCase: Region => Region = Scanners.InCase(_)
-  private val InCond: Region => Region = Scanners.InParens(LPAREN, _)
-  private val InFor : Region => Region = Scanners.InBraces(_)
+  private val InCond: Region => Region = Scanners.InParens(LPAREN, commaSeparated=false, _)
+  private val InFor : Region => Region = Scanners.InBraces(commaSeparated=false, _)
 
   abstract class ParserCommon(val source: SourceFile)(using Context) {
 
@@ -248,8 +248,13 @@ object Parsers {
 
     /** Skip on error to next safe point.
      */
-    protected def skip(stopAtComma: Boolean): Unit =
+    protected def skip(): Unit =
       val lastRegion = in.currentRegion
+      val stopAtComma = lastRegion match {
+        case InBraces(commaSeparated, _) => commaSeparated
+        case InParens(_, commaSeparated, _) => commaSeparated
+        case _ => false
+      }
       def atStop =
         in.token == EOF
         || ((stopAtComma && in.token == COMMA) || skipStopTokens.contains(in.token)) && (in.currentRegion eq lastRegion)
@@ -277,13 +282,13 @@ object Parsers {
       if (in.token == EOF) incompleteInputError(msg)
       else
         syntaxError(msg, offset)
-        skip(stopAtComma = true)
+        skip()
 
     def syntaxErrorOrIncomplete(msg: Message, span: Span): Unit =
       if (in.token == EOF) incompleteInputError(msg)
       else
         syntaxError(msg, span)
-        skip(stopAtComma = true)
+        skip()
 
     /** Consume one token of the specified type, or
       * signal an error if it is not there.
@@ -351,7 +356,7 @@ object Parsers {
             false // it's a statement that might be legal in an outer context
           else
             in.nextToken() // needed to ensure progress; otherwise we might cycle forever
-            skip(stopAtComma=false)
+            skip()
             true
 
       in.observeOutdented()
@@ -560,14 +565,20 @@ object Parsers {
 
     /** part { `,` part }
       */
-    def commaSeparated[T](part: () => T, readFirst: Boolean = true): List[T] = {
+    def commaSeparated[T](part: () => T, delimited: Boolean, readFirst: Boolean = true): List[T] = inSepRegion {
+      case InParens(t, _, outer) if delimited => InParens(t, commaSeparated=true, outer)
+      case InBraces(_, outer) if delimited=>
+        InBraces(commaSeparated=true, outer)
+      case r => r
+    } {
       val ts = new ListBuffer[T]
-      val expectedEnd: Token = in.currentRegion match {
-        case InParens(LPAREN, _) => RPAREN
-        case InParens(LBRACKET, _) => RBRACKET
-        case InBraces(_) => RBRACE
+      val expectedEnd: Token = if (!delimited) EMPTY else (in.currentRegion match {
+        case InParens(LPAREN, /*commaSeparated=*/true, _) => RPAREN
+        case InParens(LBRACKET, /*commaSeparated=*/true, _) => RBRACKET
+        case InBraces(/*commaSeparated=*/true, _) => RBRACE
         case _ => EMPTY
-      }
+      })
+      //println(s"${in} ${tokenString(expectedEnd)}")
       if (readFirst) ts += part()
       var done = false
       while (in.token == COMMA && !done) {
@@ -579,13 +590,17 @@ object Parsers {
           ts += part()
         }
       }
+      //println(s"${in} ${tokenString(expectedEnd)}")
+      println(s"comma ${in} ${tokenString(expectedEnd)}")
       if (expectedEnd != EMPTY && in.token != expectedEnd) {
+        //println("erroring")
         // As a side effect, will skip to the nearest safe point, which might be a comma
         syntaxErrorOrIncomplete(ExpectedTokenButFound(expectedEnd, in.token))
         if (in.token == COMMA) {
-          ts ++= commaSeparated(part)
+          ts ++= commaSeparated(part, delimited)
         }
       }
+      //println("exiting")
       ts.toList
     }
 
@@ -1421,9 +1436,9 @@ object Parsers {
               case Ident(name) if name != tpnme.WILDCARD && in.isColon() =>
                 isValParamList = true
                 typedFunParam(paramStart, name.toTermName, imods) :: commaSeparated(
-                    () => typedFunParam(in.offset, ident(), imods), readFirst = false)
+                    () => typedFunParam(in.offset, ident(), imods),delimited=true, readFirst = false)
               case t =>
-                t :: commaSeparated(funArgType, readFirst = false)
+                t :: commaSeparated(funArgType, delimited=true,readFirst = false)
             }
             accept(RPAREN)
             if isValParamList || in.isArrow then
@@ -1524,7 +1539,7 @@ object Parsers {
     /**  FunParamClause ::=  ‘(’ TypedFunParam {‘,’ TypedFunParam } ‘)’
      */
     def funParamClause(): List[ValDef] =
-      inParens(commaSeparated(() => typedFunParam(in.offset, ident())))
+      inParens(commaSeparated(() => typedFunParam(in.offset, ident()), delimited=true))
 
     def funParamClauses(): List[List[ValDef]] =
       if in.token == LPAREN then funParamClause() :: funParamClauses() else Nil
@@ -1637,7 +1652,7 @@ object Parsers {
       else
         def singletonArgs(t: Tree): Tree =
           if in.token == LPAREN && in.featureEnabled(Feature.dependent)
-          then singletonArgs(AppliedTypeTree(t, inParens(commaSeparated(singleton))))
+          then singletonArgs(AppliedTypeTree(t, inParens(commaSeparated(singleton, delimited=true))))
           else t
         singletonArgs(simpleType1())
 
@@ -1754,7 +1769,7 @@ object Parsers {
         val rest =
           if (in.token == COMMA) {
             in.nextToken()
-            commaSeparated(arg)
+            commaSeparated(arg, delimited=true)
           }
           else Nil
         first :: rest
@@ -1767,7 +1782,7 @@ object Parsers {
           case firstArg =>
             otherArgs(firstArg, () => argType())
         }
-      else commaSeparated(() => argType())
+      else commaSeparated(() => argType(),delimited=true)
     }
 
     /** FunArgType ::=  Type | `=>' Type
@@ -2160,7 +2175,7 @@ object Parsers {
           var mods1 = mods
           if isErased then mods1 = addModifier(mods1)
           try
-            commaSeparated(() => binding(mods1))
+            commaSeparated(() => binding(mods1), delimited=true)
           finally
             accept(RPAREN)
       else {
@@ -2392,7 +2407,7 @@ object Parsers {
     /**   ExprsInParens     ::=  ExprInParens {`,' ExprInParens}
      */
     def exprsInParensOpt(): List[Tree] =
-      if (in.token == RPAREN) Nil else commaSeparated(exprInParens)
+      if (in.token == RPAREN) Nil else commaSeparated(exprInParens, delimited=true)
 
     /** ParArgumentExprs ::= `(' [‘using’] [ExprsInParens] `)'
      *                    |  `(' [ExprsInParens `,'] PostfixExpr `*' ')'
@@ -2402,9 +2417,9 @@ object Parsers {
         (Nil, false)
       else if isIdent(nme.using) then
         in.nextToken()
-        (commaSeparated(argumentExpr), true)
+        (commaSeparated(argumentExpr,delimited=true), true)
       else
-        (commaSeparated(argumentExpr), false)
+        (commaSeparated(argumentExpr, delimited=true), false)
     }
 
     /** ArgumentExprs ::= ParArgumentExprs
@@ -2548,7 +2563,7 @@ object Parsers {
               if (leading == LBRACE || in.token == CASE)
                 enumerators()
               else {
-                val pats = patternsOpt()
+                val pats = patternsOpt(delimited=false)
                 val pat =
                   if (in.token == RPAREN || pats.length > 1) {
                     wrappedEnums = false
@@ -2740,7 +2755,7 @@ object Parsers {
       case USCORE =>
         wildcardIdent()
       case LPAREN =>
-        atSpan(in.offset) { makeTupleOrParens(inParens(patternsOpt())) }
+        atSpan(in.offset) { makeTupleOrParens(inParens(patternsOpt(delimited=true))) }
       case QUOTE =>
         simpleExpr(Location.InPattern)
       case XMLSTART =>
@@ -2776,17 +2791,17 @@ object Parsers {
 
     /** Patterns          ::=  Pattern [`,' Pattern]
      */
-    def patterns(location: Location = Location.InPattern): List[Tree] =
-      commaSeparated(() => pattern(location))
+    def patterns(delimited: Boolean=false, location: Location = Location.InPattern): List[Tree] =
+      commaSeparated(() => pattern(location), delimited)
 
-    def patternsOpt(location: Location = Location.InPattern): List[Tree] =
-      if (in.token == RPAREN) Nil else patterns(location)
+    def patternsOpt(delimited: Boolean, location: Location = Location.InPattern): List[Tree] =
+      if (in.token == RPAREN) Nil else patterns(delimited, location)
 
     /** ArgumentPatterns  ::=  ‘(’ [Patterns] ‘)’
      *                      |  ‘(’ [Patterns ‘,’] PatVar ‘*’ ‘)’
      */
     def argumentPatterns(): List[Tree] =
-      inParens(patternsOpt(Location.InPatternArgs))
+      inParens(patternsOpt(delimited=true,Location.InPatternArgs))
 
 /* -------- MODIFIERS and ANNOTATIONS ------------------------------------------- */
 
@@ -2967,7 +2982,7 @@ object Parsers {
           TypeDef(name, lambdaAbstract(hkparams, bounds)).withMods(mods)
         }
       }
-      commaSeparated(() => typeParam())
+      commaSeparated(() => typeParam(), delimited=true)
     }
 
     def typeParamClauseOpt(ownerKind: ParamOwner.Value): List[TypeDef] =
@@ -2976,7 +2991,7 @@ object Parsers {
     /** ContextTypes   ::=  FunArgType {‘,’ FunArgType}
      */
     def contextTypes(ofClass: Boolean, nparams: Int, impliedMods: Modifiers): List[ValDef] =
-      val tps = commaSeparated(funArgType)
+      val tps = commaSeparated(funArgType, delimited=true)
       var counter = nparams
       def nextIdx = { counter += 1; counter }
       val paramFlags = if ofClass then Private | Local | ParamAccessor else Param
@@ -3080,7 +3095,7 @@ object Parsers {
                 !impliedMods.is(Given)
                 || startParamTokens.contains(in.token)
                 || isIdent && (in.name == nme.inline || in.lookahead.isColon())
-              if isParams then commaSeparated(() => param())
+              if isParams then commaSeparated(() => param(), delimited=true)
               else contextTypes(ofClass, nparams, impliedMods)
           checkVarArgsRules(clause)
           clause
@@ -3129,7 +3144,7 @@ object Parsers {
      */
     def importClause(leading: Token, mkTree: ImportConstr): List[Tree] = {
       val offset = accept(leading)
-      commaSeparated(importExpr(mkTree)) match {
+      commaSeparated(importExpr(mkTree), delimited=false) match {
         case t :: rest =>
           // The first import should start at the start offset of the keyword.
           val firstPos =
@@ -3235,7 +3250,7 @@ object Parsers {
             case GIVEN =>
               mkTree(qual, givenSelector() :: Nil)
             case LBRACE =>
-              mkTree(qual, inBraces(commaSeparated(importSelector(idOK = true))))
+              mkTree(qual, inBraces(commaSeparated(importSelector(idOK = true), delimited=true)))
             case _ =>
               if isIdent(nme.raw.STAR) then
                 mkTree(qual, wildcardSelector() :: Nil)
@@ -3292,7 +3307,7 @@ object Parsers {
       var lhs = first match {
         case id: Ident if in.token == COMMA =>
           in.nextToken()
-          id :: commaSeparated(() => termIdent())
+          id :: commaSeparated(() => termIdent(), delimited=false)
         case _ =>
           first :: Nil
       }
@@ -3563,7 +3578,7 @@ object Parsers {
         val id = termIdent()
         if (in.token == COMMA) {
           in.nextToken()
-          val ids = commaSeparated(() => termIdent())
+          val ids = commaSeparated(() => termIdent(), delimited=false)
           PatDef(mods1, id :: ids, TypeTree(), EmptyTree)
         }
         else {
@@ -3767,7 +3782,7 @@ object Parsers {
       val derived =
         if (isIdent(nme.derives)) {
           in.nextToken()
-          commaSeparated(() => convertToTypeId(qualId()))
+          commaSeparated(() => convertToTypeId(qualId()), delimited=false)
         }
         else Nil
       possibleTemplateStart()
@@ -3858,7 +3873,9 @@ object Parsers {
         else if (in.token == IMPORT)
           stats ++= importClause(IMPORT, mkImport(outermost))
         else if (in.token == EXPORT)
+          println("reading export top")
           stats ++= importClause(EXPORT, Export(_,_))
+          println(s"after reading export top $in")
         else if isIdent(nme.extension) && followingIsExtension() then
           stats += extension()
         else if isDefIntro(modifierTokens) then
@@ -3906,7 +3923,9 @@ object Parsers {
         if (in.token == IMPORT)
           stats ++= importClause(IMPORT, mkImport())
         else if (in.token == EXPORT)
+          println("before export inner")
           stats ++= importClause(EXPORT, Export(_,_))
+          println(s"after reading export inner $in")
         else if isIdent(nme.extension) && followingIsExtension() then
           stats += extension()
         else if (isDefIntro(modifierTokensOrCase))

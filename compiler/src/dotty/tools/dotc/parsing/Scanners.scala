@@ -276,7 +276,7 @@ object Scanners {
     /** Are we in a `${ }` block? such that RBRACE exits back into multiline string. */
     private def inMultiLineInterpolatedExpression =
       currentRegion match {
-        case InBraces(InString(true, _)) => true
+        case InBraces(_, InString(true, _)) => true
         case _ => false
       }
 
@@ -294,9 +294,9 @@ object Scanners {
 
     def adjustSepRegions(lastToken: Token): Unit = (lastToken: @switch) match {
       case LPAREN | LBRACKET =>
-        currentRegion = InParens(lastToken, currentRegion)
+        currentRegion = InParens(lastToken, commaSeparated=false,currentRegion)
       case LBRACE =>
-        currentRegion = InBraces(currentRegion)
+        currentRegion = InBraces(commaSeparated=false, currentRegion)
       case RBRACE =>
         def dropBraces(): Unit = currentRegion match {
           case r: InBraces =>
@@ -310,7 +310,7 @@ object Scanners {
         dropBraces()
       case RPAREN | RBRACKET =>
         currentRegion match {
-          case InParens(prefix, outer) if prefix + 1 == lastToken => currentRegion = outer
+          case InParens(prefix, _, outer) if prefix + 1 == lastToken => currentRegion = outer
           case _ =>
         }
       case STRINGLIT =>
@@ -1439,7 +1439,7 @@ object Scanners {
     def proposeKnownWidth(width: IndentWidth, lastToken: Token) =
       if knownWidth == null then
         this match
-          case InParens(_, _) if lastToken != LPAREN =>
+          case InParens(_, _, _) if lastToken != LPAREN =>
             useOuterWidth()
           case _ =>
             knownWidth = width
@@ -1450,8 +1450,8 @@ object Scanners {
 
     private def delimiter = this match
       case _: InString => "}(in string)"
-      case InParens(LPAREN, _) => ")"
-      case InParens(LBRACKET, _) => "]"
+      case InParens(LPAREN, _, _) => ")"
+      case InParens(LBRACKET, _, _) => "]"
       case _: InBraces => "}"
       case _: InCase => "=>"
       case _: Indented => "UNDENT"
@@ -1466,8 +1466,8 @@ object Scanners {
   end Region
 
   case class InString(multiLine: Boolean, outer: Region) extends Region
-  case class InParens(prefix: Token, outer: Region) extends Region
-  case class InBraces(outer: Region) extends Region
+  case class InParens(prefix: Token, commaSeparated: Boolean, outer: Region) extends Region
+  case class InBraces(commaSeparated: Boolean, outer: Region) extends Region
   case class InCase(outer: Region) extends Region
 
   /** A class describing an indentation region.
