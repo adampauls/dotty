@@ -73,8 +73,8 @@ object Parsers {
     else new Parser(source)
 
   private val InCase: Region => Region = Scanners.InCase(_)
-  private val InCond: Region => Region = Scanners.InParens(LPAREN, commaSeparated=false, _)
-  private val InFor : Region => Region = Scanners.InBraces(commaSeparated=false, _)
+  private val InCond: Region => Region = Scanners.InParens(LPAREN, _)
+  private val InFor : Region => Region = Scanners.InBraces(_)
 
   abstract class ParserCommon(val source: SourceFile)(using Context) {
 
@@ -250,11 +250,7 @@ object Parsers {
      */
     protected def skip(): Unit =
       val lastRegion = in.currentRegion
-      val stopAtComma = lastRegion match {
-        case InBraces(commaSeparated, _) => commaSeparated
-        case InParens(_, commaSeparated, _) => commaSeparated
-        case _ => false
-      }
+      val stopAtComma = lastRegion.isInstanceOf[InCommaSeparated]
       def atStop =
         in.token == EOF
         || ((stopAtComma && in.token == COMMA) || skipStopTokens.contains(in.token)) && (in.currentRegion eq lastRegion)
@@ -565,22 +561,19 @@ object Parsers {
 
     /** part { `,` part }
       */
-    def commaSeparated[T](part: () => T, delimited: Boolean, readFirst: Boolean = true): List[T] = inSepRegion {
-      case InParens(t, _, outer) if delimited => InParens(t, commaSeparated=true, outer)
-      case InBraces(_, outer) if delimited=>
-        InBraces(commaSeparated=true, outer)
-      case r => r
-    } {
+    def commaSeparated[T](part: () => T, delimited: Boolean, readFirst: Boolean = true): List[T] = {
       val ts = new ListBuffer[T]
       val expectedEnd: Token = if (!delimited) EMPTY else (in.currentRegion match {
-        case InParens(LPAREN, /*commaSeparated=*/true, _) => RPAREN
-        case InParens(LBRACKET, /*commaSeparated=*/true, _) => RBRACKET
-        case InBraces(/*commaSeparated=*/true, _) => RBRACE
+        case InParens(LPAREN, _) => RPAREN
+        case InParens(LBRACKET, _) => RBRACKET
+        case InBraces(_) => RBRACE
         case _ => EMPTY
       })
+      in.currentRegion = InCommaSeparated(in.currentRegion)
       //println(s"${in} ${tokenString(expectedEnd)}")
       if (readFirst) ts += part()
       var done = false
+      //println(s"after first ${in} ${tokenString(expectedEnd)}")
       while (in.token == COMMA && !done) {
         in.nextToken()
         if (in.isAfterLineEnd && (in.token == OUTDENT || (expectedEnd != EMPTY && in.token == expectedEnd))) {
@@ -590,8 +583,7 @@ object Parsers {
           ts += part()
         }
       }
-      //println(s"${in} ${tokenString(expectedEnd)}")
-      println(s"comma ${in} ${tokenString(expectedEnd)}")
+      // println(s"xxx ${in} ${tokenString(expectedEnd)}")
       if (expectedEnd != EMPTY && in.token != expectedEnd) {
         //println("erroring")
         // As a side effect, will skip to the nearest safe point, which might be a comma
@@ -600,7 +592,10 @@ object Parsers {
           ts ++= commaSeparated(part, delimited)
         }
       }
-      //println("exiting")
+      while(in.currentRegion.isInstanceOf[InCommaSeparated]) {
+        in.currentRegion = in.currentRegion.enclosing
+      }
+      // println("exiting")
       ts.toList
     }
 
@@ -3873,9 +3868,9 @@ object Parsers {
         else if (in.token == IMPORT)
           stats ++= importClause(IMPORT, mkImport(outermost))
         else if (in.token == EXPORT)
-          println("reading export top")
+          // println("reading export top")
           stats ++= importClause(EXPORT, Export(_,_))
-          println(s"after reading export top $in")
+          // println(s"after reading export top $in")
         else if isIdent(nme.extension) && followingIsExtension() then
           stats += extension()
         else if isDefIntro(modifierTokens) then
@@ -3923,9 +3918,9 @@ object Parsers {
         if (in.token == IMPORT)
           stats ++= importClause(IMPORT, mkImport())
         else if (in.token == EXPORT)
-          println("before export inner")
+          // println("before export inner")
           stats ++= importClause(EXPORT, Export(_,_))
-          println(s"after reading export inner $in")
+          // println(s"after reading export inner $in")
         else if isIdent(nme.extension) && followingIsExtension() then
           stats += extension()
         else if (isDefIntro(modifierTokensOrCase))

@@ -276,7 +276,7 @@ object Scanners {
     /** Are we in a `${ }` block? such that RBRACE exits back into multiline string. */
     private def inMultiLineInterpolatedExpression =
       currentRegion match {
-        case InBraces(_, InString(true, _)) => true
+        case InBraces(InString(true, _)) => true
         case _ => false
       }
 
@@ -294,9 +294,9 @@ object Scanners {
 
     def adjustSepRegions(lastToken: Token): Unit = (lastToken: @switch) match {
       case LPAREN | LBRACKET =>
-        currentRegion = InParens(lastToken, commaSeparated=false,currentRegion)
+        currentRegion = InParens(lastToken, currentRegion)
       case LBRACE =>
-        currentRegion = InBraces(commaSeparated=false, currentRegion)
+        currentRegion = InBraces(currentRegion)
       case RBRACE =>
         def dropBraces(): Unit = currentRegion match {
           case r: InBraces =>
@@ -310,7 +310,7 @@ object Scanners {
         dropBraces()
       case RPAREN | RBRACKET =>
         currentRegion match {
-          case InParens(prefix, _, outer) if prefix + 1 == lastToken => currentRegion = outer
+          case InParens(prefix, outer) if prefix + 1 == lastToken => currentRegion = outer
           case _ =>
         }
       case STRINGLIT =>
@@ -505,24 +505,33 @@ object Scanners {
      *  if the current indentation width and the indentation of the current token are incomparable.
      */
     def handleNewLine(lastToken: Token) =
+      // println(s"handling ${this} ${currentRegion}")
       var indentIsSignificant = false
       var newlineIsSeparating = false
       var lastWidth = IndentWidth.Zero
       var indentPrefix = EMPTY
       val nextWidth = indentWidth(offset)
+      currentRegion match {
+        case InCommaSeparated(r: Indented) if lastToken != COMMA =>
+          // println("setting!")
+          currentRegion = r
+        case _ =>
+      }
       currentRegion match
         case r: Indented =>
           indentIsSignificant = indentSyntax
           lastWidth = r.width
           newlineIsSeparating = lastWidth <= nextWidth || r.isOutermost
+         //  println(s"herexxx ${lastWidth} ${nextWidth}")
           indentPrefix = r.prefix
         case _: InString => ()
         case r =>
           indentIsSignificant = indentSyntax
           r.proposeKnownWidth(nextWidth, lastToken)
           lastWidth = r.knownWidth
+          // println(s"here ${r}")
           newlineIsSeparating = r.isInstanceOf[InBraces]
-
+      // println(s"nnn ${newlineIsSeparating} ${currentRegion}")
       if newlineIsSeparating
          && canEndStatTokens.contains(lastToken)
          && canStartStatTokens.contains(token)
@@ -539,6 +548,7 @@ object Scanners {
             currentRegion match
               case r: Indented =>
                 currentRegion = r.enclosing
+                // println(s"inserting! ${nextWidth} ${lastWidth} ${r} ${currentRegion}")
                 insert(OUTDENT, offset)
               case r: InBraces if !closingRegionTokens.contains(token) =>
                 report.warning("Line is indented too far to the left, or a `}` is missing", sourcePos())
@@ -553,6 +563,7 @@ object Scanners {
             currentRegion.knownWidth = nextWidth
         else if (lastWidth != nextWidth)
           errorButContinue(spaceTabMismatchMsg(lastWidth, nextWidth))
+      // println(s"current ${currentRegion} ${this}")
       currentRegion match
         case Indented(curWidth, others, prefix, outer)
         if curWidth < nextWidth && !others.contains(nextWidth) && nextWidth != lastWidth =>
@@ -598,6 +609,7 @@ object Scanners {
          && !(token == CASE && r.prefix == MATCH)
          && next.token == EMPTY  // can be violated for ill-formed programs, e.g. neg/i12605.sala
       =>
+        println("observing")
         currentRegion = r.enclosing
         insert(OUTDENT, offset)
       case _ =>
@@ -614,11 +626,17 @@ object Scanners {
       this.copyFrom(prev)
     }
 
-    def closeIndented() = currentRegion match
-      case r: Indented if !r.isOutermost =>
-        insert(OUTDENT, offset)
-        currentRegion = r.outer
-      case _ =>
+    def closeIndented(): Unit = {
+      // println(s"closeIndented ${currentRegion}")
+      currentRegion match
+        case r: Indented if !r.isOutermost =>
+          insert(OUTDENT, offset)
+          currentRegion = r.outer
+        case InCommaSeparated(r: Indented) =>
+          currentRegion = r
+          closeIndented()
+        case _ =>
+    }
 
     /** - Join CASE + CLASS => CASECLASS, CASE + OBJECT => CASEOBJECT
      *         SEMI + ELSE => ELSE, COLON + <EOL> => COLONEOL
@@ -644,6 +662,7 @@ object Scanners {
           def isEnclosedInParens(r: Region): Boolean = r match
             case r: Indented => isEnclosedInParens(r.outer)
             case _: InParens => true
+            case c: InCommaSeparated => isEnclosedInParens(c.outer)
             case _ => false
           currentRegion match
             case r: Indented if isEnclosedInParens(r.outer) =>
@@ -1439,7 +1458,7 @@ object Scanners {
     def proposeKnownWidth(width: IndentWidth, lastToken: Token) =
       if knownWidth == null then
         this match
-          case InParens(_, _, _) if lastToken != LPAREN =>
+          case InParens(_, _) if lastToken != LPAREN =>
             useOuterWidth()
           case _ =>
             knownWidth = width
@@ -1450,8 +1469,8 @@ object Scanners {
 
     private def delimiter = this match
       case _: InString => "}(in string)"
-      case InParens(LPAREN, _, _) => ")"
-      case InParens(LBRACKET, _, _) => "]"
+      case InParens(LPAREN, _) => ")"
+      case InParens(LBRACKET, _) => "]"
       case _: InBraces => "}"
       case _: InCase => "=>"
       case _: Indented => "UNDENT"
@@ -1466,8 +1485,9 @@ object Scanners {
   end Region
 
   case class InString(multiLine: Boolean, outer: Region) extends Region
-  case class InParens(prefix: Token, commaSeparated: Boolean, outer: Region) extends Region
-  case class InBraces(commaSeparated: Boolean, outer: Region) extends Region
+  case class InParens(prefix: Token, outer: Region) extends Region
+  case class InCommaSeparated(outer: Region) extends Region
+  case class InBraces(outer: Region) extends Region
   case class InCase(outer: Region) extends Region
 
   /** A class describing an indentation region.
