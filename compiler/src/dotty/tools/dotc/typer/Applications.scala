@@ -1347,14 +1347,30 @@ trait Applications extends Compatibility {
             unapplyArgType
           }
         val dummyArg = dummyTreeOfType(ownType)
-
+        var unapplyApp: tpd.Tree = null
         val unapplyAppTpe = {
-          var currType = mt.resultType
-          while (currType.isImplicitMethod) {
-            val currMtType = currType.asInstanceOf[MethodType]
-            currType = currMtType.resultType
+          val explicitCall = Apply(unapplyFn, dummyArg :: Nil)
+          tryEither {
+            unapplyApp = typedExpr(untpd.TypedSplice(explicitCall))
+            unapplyApp.tpe
+          } { (_, _) =>
+            // Typing explicitCall may fail if there are implicits that can only
+            // be resolved with tighter bounds on the output types
+            // (e.g. def unapply[T](x: String)(using Foo[T]): Option[T])
+            // If the call above fails to type, we try again here but with wildcards
+            // filled in for any implicits. Once we have recursively typed unapplyPatterns below,
+            // type variables may have tighter bounds and we can try again.
+            unapplyApp = null
+            var currType = mt.resultType
+            var callWithImplicits = explicitCall
+            while (currType.isImplicitMethod) {
+              val currMtType = currType.asInstanceOf[MethodType]
+              val wildcards = List.fill(currMtType.paramInfos.length)(dummyTreeOfType(WildcardType))
+              callWithImplicits = Apply(callWithImplicits, wildcards)
+              currType = currMtType.resultType
+            }
+            typedExpr(untpd.TypedSplice(callWithImplicits)).tpe
           }
-          currType
         }
         def unapplyImplicits(unapp: Tree): List[Tree] = {
           val res = List.newBuilder[Tree]
@@ -1384,7 +1400,7 @@ trait Applications extends Compatibility {
             List.fill(argTypes.length - args.length)(WildcardType)
         }
         val unapplyPatterns = bunchedArgs.lazyZip(argTypes) map (typed(_, _))
-        val unapplyApp = typedExpr(untpd.TypedSplice(Apply(unapplyFn, dummyArg :: Nil)))
+        if (unapplyApp == null) unapplyApp = typedExpr(untpd.TypedSplice(Apply(unapplyFn, dummyArg :: Nil)))
         val result = assignType(cpy.UnApply(tree)(unapplyFn, unapplyImplicits(unapplyApp), unapplyPatterns), ownType)
         unapp.println(s"unapply patterns = $unapplyPatterns")
         if (ownType.stripped eq selType.stripped) || ownType.isError then result
