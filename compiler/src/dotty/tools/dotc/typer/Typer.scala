@@ -490,6 +490,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    */
   def typedIdent(tree: untpd.Ident, pt: Type)(using Context): Tree =
     record("typedIdent")
+    //println(s"iii ${tree.show} :: ${pt.show} || ${tree.toString} ++ ${pt.toString}")
     val name = tree.name
     def kind = if (name.isTermName) "" else "type "
     typr.println(s"typed ident $kind$name in ${ctx.owner}")
@@ -840,7 +841,12 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
 
     def ascription(tpt: Tree, isWildcard: Boolean) = {
       val underlyingTreeTpe =
-        if (isRepeatedParamType(tpt)) TypeTree(defn.SeqType.appliedTo(pt :: Nil))
+        if (isRepeatedParamType(tpt)) {
+          pt match {
+            case AppliedType(_, targ) => TypeTree(defn.SeqType.appliedTo(targ))
+            case _ => assert(false, "unreachable")
+          }
+        }
         else tpt
       val expr1 =
         if isWildcard then tree.expr.withType(underlyingTreeTpe.tpe)
@@ -881,7 +887,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         assignType(cpy.Typed(tree)(expr1, tpt1), tpt1)
       }
       cases(
-        ifPat = ascription(TypeTree(defn.RepeatedParamType.appliedTo(pt)), isWildcard = true),
+        ifPat = ascription(TypeTree(pt), isWildcard = true),
         ifExpr = typedWildcardStarArgExpr,
         wildName = nme.WILDCARD_STAR)
     }

@@ -1,3 +1,3 @@
 object Test:
-  val List(x, y, _*,
+  val List(x, y, _*, // error
 // error

@@ -568,8 +568,8 @@ class SpaceEngine(using Context) extends SpaceLogic {
           val (arity, elemTp, resultTp) = unapplySeqInfo(resTp, unappSym.srcPos)
           if (elemTp.exists) scalaListType.appliedTo(elemTp) :: Nil
           else {
-            val sels = productSeqSelectors(resultTp, arity, unappSym.srcPos)
-            sels.init :+ scalaListType.appliedTo(sels.last)
+            val sels = productSeqSelectors(resultTp, arity, unappSym.srcPos, true)
+            sels.init :+ scalaListType.appliedTo(sels.last.asInstanceOf[AppliedType].args.head)
           }
         }
         else {

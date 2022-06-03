@@ -144,11 +144,11 @@ object Applications {
     }
     else tp :: Nil
 
-  def productSeqSelectors(tp: Type, argsNum: Int, pos: SrcPos)(using Context): List[Type] = {
+  def productSeqSelectors(tp: Type, argsNum: Int, pos: SrcPos, endsWithWildcardStar: Boolean)(using Context): List[Type] = {
     val selTps = productSelectorTypes(tp, pos)
     val arity = selTps.length
     val elemTp = unapplySeqTypeElemTp(selTps.last)
-    (0 until argsNum).map(i => if (i < arity - 1) selTps(i) else elemTp).toList
+    (0 until argsNum - 1).map(i => if (i < arity - 1) selTps(i) else elemTp).toList ++ (if (argsNum == 0) Nil else List(if (endsWithWildcardStar) defn.RepeatedParamType.appliedTo(elemTp) else elemTp))
   }
 
   def unapplyArgs(unapplyResult: Type, unapplyFn: Tree, args: List[untpd.Tree], pos: SrcPos)(using Context): List[Type] = {
@@ -167,11 +167,10 @@ object Applications {
     }
 
     def unapplySeq(tp: Type)(fallback: => List[Type]): List[Type] = {
+      val endsWithWildcardStar = args.lastOption.exists(untpd.isWildcardStarArg)
       val elemTp = unapplySeqTypeElemTp(tp)
-      if (elemTp.exists) args.map(Function.const(elemTp))/*(args.init.map(Function.const(elemTp)) ++ args.lastOption.map(last =>
-        if (untpd.isWildcardStarArg(last)) {defn.RepeatedParamType.appliedTo(elemTp) } else { elemTp}
-      ))*/
-      else if (isProductSeqMatch(tp, args.length, pos)) productSeqSelectors(tp, args.length, pos)
+      if (elemTp.exists) (args.dropRight(1).map(Function.const(elemTp)) ++args.lastOption.map(_ => if (endsWithWildcardStar) {defn.RepeatedParamType.appliedTo(elemTp) } else { elemTp}))
+      else if (isProductSeqMatch(tp, args.length, pos)) productSeqSelectors(tp, args.length, pos, endsWithWildcardStar)
       else if tp.derivesFrom(defn.NonEmptyTupleClass) then foldApplyTupleType(tp)
       else fallback
     }
@@ -891,7 +890,7 @@ trait Applications extends Compatibility {
    *  Block node.
    */
   def typedApply(tree: untpd.Apply, pt: Type)(using Context): Tree = {
-    //println(s"uuu typedApply ${tree.show} :: ${pt.show}")
+    //println(s"uuu typedApply ${tree.toString}")
     def realApply(using Context): Tree = {
       val originalProto =
         new FunProto(tree.args, IgnoredProto(pt))(this, tree.applyKind)(using argCtx(tree))
@@ -1380,7 +1379,6 @@ trait Applications extends Compatibility {
             case Apply(unapply, args) => res1 ++= args
             case Inlined(u, _, _) => loop(u)
             case DynamicUnapply(_) => report.error("Structural unapply is not supported", unapplyFn.srcPos)
-            //case Apply(fn, args) => assert(args.nonEmpty); loop(fn); res ++= args
             case _ => ().assertingErrorsReported
           }
           loop(unapp)
@@ -1400,10 +1398,6 @@ trait Applications extends Compatibility {
           argTypes = argTypes.take(args.length) ++
             List.fill(argTypes.length - args.length)(WildcardType)
         }
-        //val unapplyPatterns = bunchedArgs.lazyZip(argTypes) map (typed(_, _))
-        //def invertedUnapplyFunType(tpe: Type): Type = tpe match {
-        //  case MethodType(_, argTypes, resultType) => MethodTpe(List("x"), resultType, )
-        //}
         var currType = mt.resultType
         var implicitParamLists: List[List[Type]] = Nil
         while (currType.isImplicitMethod) {
@@ -1413,6 +1407,7 @@ trait Applications extends Compatibility {
         }
 
         val invertedUnapplyAppFunType = MethodType(argTypes, implicitParamLists.foldLeft(ownType)((resType, paramList) => ImplicitMethodType(paramList, resType)))
+        //println("xxx " + args.map(_.toString).mkString("||"))
         val unapplyApp = adapt(ApplyTo(tree, unapplyFn, invertedUnapplyAppFunType, null, FunProto(args, invertedUnapplyAppFunType)(this, ApplyKind.Regular), invertedUnapplyAppFunType), ownType)
 
           //println("xxx " + invertedUnapplyAppFunType.show + ":: " + argTypes.map(_.show).mkString("|") + " ?? " + args.map(_.toString).mkString("|"))
