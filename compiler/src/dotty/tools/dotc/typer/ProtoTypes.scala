@@ -108,12 +108,15 @@ object ProtoTypes {
      *  However, we should constrain parameters of the declared return type. This distinction is
      *  achieved by replacing expected type parameters with wildcards.
      */
-    def constrainResult(meth: Symbol, mt: Type, pt: Type)(using Context): Boolean =
-      if (Inliner.isInlineable(meth)) {
+    def constrainResult(isInlinable: Boolean, mt: Type, pt: Type)(using Context): Boolean =
+      if (isInlinable) {
         constrainResult(mt, wildApprox(pt))
         true
       }
       else constrainResult(mt, pt)
+
+    def constrainResult(meth: Symbol, mt: Type, pt: Type)(using Context): Boolean =
+      constrainResult(Inliner.isInlineable(meth), mt, pt)
   }
 
   object NoViewsAllowed extends Compatibility {

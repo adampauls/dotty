@@ -283,8 +283,9 @@ trait TypeAssigner {
     if mt.isResultDependent then safeSubstParams(mt.resultType, mt.paramRefs, argTypes)
     else mt.resultType
 
-  def assignType(tree: untpd.Apply, fn: Tree, args: List[Tree])(using Context): Apply = {
-    val ownType = fn.tpe.widen match {
+  def assignType(tree: untpd.Apply, fn: Tree, args: List[Tree])(using Context): Apply = assignType(tree, fn, fn.tpe, args)
+  def assignType(tree: untpd.Apply, fn: Tree, funType: Type, args: List[Tree])(using Context): Apply = {
+    val ownType = funType.widen match {
       case fntpe: MethodType =>
         if (sameLength(fntpe.paramInfos, args) || ctx.phase.prev.relaxedTyping)
           safeSubstMethodParams(fntpe, args.tpes)

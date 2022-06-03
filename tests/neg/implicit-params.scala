@@ -14,7 +14,7 @@ object Test {
   given C: C(11)
   given D: D(11)
 
-  f(1)
+  f(1): Int
   f(1)(using C)
   f(using 2)  // error
   f(1)(C)   // error
