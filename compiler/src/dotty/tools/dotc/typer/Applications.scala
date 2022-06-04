@@ -890,7 +890,6 @@ trait Applications extends Compatibility {
    *  Block node.
    */
   def typedApply(tree: untpd.Apply, pt: Type)(using Context): Tree = {
-    //println(s"uuu typedApply ${tree.toString}")
     def realApply(using Context): Tree = {
       val originalProto =
         new FunProto(tree.args, IgnoredProto(pt))(this, tree.applyKind)(using argCtx(tree))
@@ -1047,14 +1046,12 @@ trait Applications extends Compatibility {
         }
         app
       }
-    val res = app1 match {
+    app1 match {
       case Apply(Block(stats, fn), args) =>
         tpd.cpy.Block(app1)(stats, tpd.cpy.Apply(app1)(fn, args))
       case _ =>
         app1
     }
-    //println(s"vvv done typedApply ${tree.show} :: ${pt.show} || ${res.show}")
-    res
   }
 
   /** Typecheck an Apply node with a typed function and possibly-typed arguments coming from `proto` */
@@ -1398,23 +1395,21 @@ trait Applications extends Compatibility {
           argTypes = argTypes.take(args.length) ++
             List.fill(argTypes.length - args.length)(WildcardType)
         }
-        var currType = mt.resultType
-        var implicitParamLists: List[List[Type]] = Nil
-        while (currType.isImplicitMethod) {
-          val mtType  = currType.asInstanceOf[MethodType]
-          implicitParamLists =  mtType.paramInfos :: implicitParamLists
-          currType = mtType.resultType
+        // If we have e.g. unapply(t: T)(using u: U): Option[(Int, String)], produce the MethodType representing
+        // (Int, String) => (using U) => T
+        val invertedUnapplyAppFunType = {
+          var currType = mt.resultType
+          var implicitParamLists: List[List[Type]] = Nil
+          while (currType.isImplicitMethod) {
+            val mtType  = currType.asInstanceOf[MethodType]
+            implicitParamLists =  mtType.paramInfos :: implicitParamLists
+            currType = mtType.resultType
+          }
+          MethodType(argTypes, implicitParamLists.foldLeft(ownType)((resType, paramList) => ImplicitMethodType(paramList, resType)))
         }
-
-        val invertedUnapplyAppFunType = MethodType(argTypes, implicitParamLists.foldLeft(ownType)((resType, paramList) => ImplicitMethodType(paramList, resType)))
-        //println("xxx " + args.map(_.toString).mkString("||"))
         val unapplyApp = adapt(ApplyTo(tree, unapplyFn, invertedUnapplyAppFunType, null, FunProto(args, invertedUnapplyAppFunType)(this, ApplyKind.Regular), invertedUnapplyAppFunType), ownType)
 
-          //println("xxx " + invertedUnapplyAppFunType.show + ":: " + argTypes.map(_.show).mkString("|") + " ?? " + args.map(_.toString).mkString("|"))
-          //println("yyy " + unapplyApp.toString)
-        //println("xxx " + unapplyApp.show)
         val (typedArgs, implicits) = unapplyImplicits(unapplyApp)
-        //println(s"tryiing to assign ${unapplyApp.show}")
         val result = assignType(cpy.UnApply(tree)(unapplyFn, implicits, typedArgs), ownType)
         unapp.println(s"unapply patterns = $typedArgs")
         if (ownType.stripped eq selType.stripped) || ownType.isError then result

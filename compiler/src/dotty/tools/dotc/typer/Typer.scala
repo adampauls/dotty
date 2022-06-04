@@ -490,7 +490,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
    */
   def typedIdent(tree: untpd.Ident, pt: Type)(using Context): Tree =
     record("typedIdent")
-    //println(s"iii ${tree.show} :: ${pt.show} || ${tree.toString} ++ ${pt.toString}")
     val name = tree.name
     def kind = if (name.isTermName) "" else "type "
     typr.println(s"typed ident $kind$name in ${ctx.owner}")
@@ -3792,7 +3791,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
       case _ => pt
 
     def adaptNoArgs(wtp: Type): Tree = {
-      //println(s"rrr adapting ${wtp.show}")
       val ptNorm = underlyingApplied(pt)
       def functionExpected = defn.isFunctionType(ptNorm)
       def needsEta = pt match {
@@ -3801,7 +3799,7 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         case _ => true
       }
       var resMatch: Boolean = false
-      val res = wtp match {
+      wtp match {
         case wtp: ExprType =>
           readaptSimplified(tree.withType(wtp.resultType))
         case wtp: MethodType if wtp.isImplicitMethod &&
@@ -3831,8 +3829,6 @@ class Typer(@constructorOnly nestingLevel: Int = 0) extends Namer
         case _ =>
           adaptNoArgsOther(wtp, functionExpected)
       }
-      //println(s"sss done  adapting ${wtp.show} :: ${res.show}")
-      res
     }
 
     /** Adapt an expression of constant type to a different constant type `tpe`. */
