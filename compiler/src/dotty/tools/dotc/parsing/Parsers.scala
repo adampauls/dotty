@@ -22,7 +22,7 @@ import ast.Trees._
 import StdNames._
 import util.Spans._
 import Constants._
-import Symbols.NoSymbol
+import Symbols.{NoSymbol, defn}
 import ScriptParsers._
 import Decorators._
 import util.Chars
@@ -2631,8 +2631,25 @@ object Parsers {
     /** Guard ::= if PostfixExpr
      */
     def guard(): Tree =
-      if (in.token == IF) { in.nextToken(); postfixExpr(Location.InGuard) }
+      if (in.token == IF) {
+        in.nextToken()
+        postfixExpr(Location.InGuard)
+      }
       else EmptyTree
+
+    /** NestedPattern ::= 'then' InfixExpr MatchClause      */
+    def nestedPattern(): Tree =
+      if (in.token == THEN) {
+        in.nextToken()
+        postfixExpr(Location.InGuard) match {
+          case m @ Match(_, _) => m
+          case e =>
+            syntaxError(em"Expected match clause after then", e.span)
+            EmptyTree
+        }
+      }
+      else EmptyTree
+
 
     /** Enumerators ::= Generator {semi Enumerator | Guard}
      */
@@ -2770,11 +2787,17 @@ object Parsers {
      *  ExprCaseClause    ::=  ‘case’ Pattern [Guard] ‘=>’ Expr
      */
     def caseClause(exprOnly: Boolean = false): CaseDef = atSpan(in.offset) {
-      val (pat, grd) = inSepRegion(InCase) {
+      val (pat, grd, nestedMatch) = inSepRegion(InCase) {
         accept(CASE)
-        (pattern(), guard())
+        (pattern(), guard(), nestedPattern())
       }
-      CaseDef(pat, grd, atSpan(accept(ARROW)) {
+      val body = nestedMatch match
+        case Match(_, _ :+ last) if isDefaultCase(last) => nestedMatch
+        case Match(sel, cases) =>
+          val defaultCase = CaseDef(Ident(nme.WILDCARD), EmptyTree, Apply(ref(defn.continueMethod), Nil))
+          cpy.Match(nestedMatch)(sel, cases :+ defaultCase)
+        case _ => EmptyTree
+      CaseDef(pat, grd, body.orElse(atSpan(accept(ARROW)) {
         if exprOnly then
           if in.indentSyntax && in.isAfterLineEnd && in.token != INDENT then
             warning(em"""Misleading indentation: this expression forms part of the preceding catch case.
@@ -2783,7 +2806,7 @@ object Parsers {
                         |an indented case.""")
           expr()
         else block()
-      })
+      }))
     }
 
     /** TypeCaseClause     ::= ‘case’ (InfixType | ‘_’) ‘=>’ Type [semi]
